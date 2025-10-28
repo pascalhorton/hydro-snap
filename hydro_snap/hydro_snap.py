@@ -7,29 +7,29 @@ catchment borders, and perform DEM corrections.
 
 import math
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Tuple
 
+from affine import Affine
 import geopandas as gpd
 import numpy as np
+from pysheds.grid import Grid
 import rasterio
 import rasterio.features
-from affine import Affine
-from pysheds.grid import Grid
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from shapely.geometry import Point, mapping
 
 
 def recondition_dem(
-        dem_raster: Union[str, Path],
-        streams_shp: Union[str, Path],
-        output_dir: Union[str, Path],
+        dem_raster: str | Path,
+        streams_shp: str | Path,
+        output_dir: str | Path,
         delta: float = 0.0001,
-        outlet_shp: Optional[Union[str, Path]] = None,
-        catchment_shp: Optional[Union[str, Path]] = None,
-        breaches_shp: Optional[Union[str, Path]] = None,
+        outlet_shp: str | Path | None = None,
+        catchment_shp: str | Path | None = None,
+        breaches_shp: str | Path | None = None,
         walls_height: float = 1000,
-        epsg_code: Optional[int] = None,
+        epsg_code: int | None = None,
 ) -> None:
     """Recondition the DEM based on the stream network.
 
@@ -143,10 +143,7 @@ def recondition_dem(
     print(f"Corrected DEM saved to {output_dem_path}")
 
 
-def _open_raster_check_crs(
-        raster_path: Union[str, Path],
-        epsg_code: Optional[int]
-) -> "rasterio.io.DatasetReader":
+def _open_raster_check_crs(raster_path: str | Path, epsg_code: int | None):
     """Open a raster and ensure CRS is defined (or set it).
 
     Returns a rasterio DatasetReader.
@@ -165,9 +162,9 @@ def _open_raster_check_crs(
 
 
 def _open_vector_check_crs(
-        shapefile_path: Union[str, Path],
-        epsg_code: Optional[int],
-) -> "gpd.GeoDataFrame":
+        shapefile_path: str | Path,
+        epsg_code: int | None,
+) -> gpd.GeoDataFrame:
     """Open a vector file and ensure CRS is defined (or set it).
 
     Returns a GeoDataFrame with the expected CRS.
@@ -188,9 +185,9 @@ def _open_vector_check_crs(
 
 
 def _prepare_streams(
-        streams_shp: Union[str, Path],
-        output_dir: Union[str, Path],
-) -> "gpd.GeoDataFrame":
+        streams_shp: str | Path,
+        output_dir: str | Path,
+) -> gpd.GeoDataFrame:
     """Prepare the streams by adding a rank to each stream.
 
     The function writes `streams.shp` to `output_dir` and returns the
@@ -223,8 +220,8 @@ def _prepare_streams(
 
 
 def _iterate_stream_rank(
-        streams: "gpd.GeoDataFrame",
-        streams_touching: "gpd.GeoDataFrame",
+        streams: gpd.GeoDataFrame,
+        streams_touching: gpd.GeoDataFrame,
         rank: int,
 ) -> None:
     """Recursively set a rank for connected stream segments."""
@@ -247,10 +244,10 @@ def _iterate_stream_rank(
 
 
 def _recondition_dem(
-        original_dem,
-        streams: "gpd.GeoDataFrame",
+        original_dem: rasterio.io.DatasetReader,
+        streams: gpd.GeoDataFrame,
         delta: float,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Correct the DEM based on the stream network.
 
     This walks ordered cells along each stream and ensures a downslope
@@ -305,13 +302,13 @@ def _recondition_dem(
 
 
 def _build_walls_at_catchment_borders(
-        dem: "np.ndarray",
-        catchment_shp: Union[str, Path],
-        breaches_shp: Union[str, Path],
-        streams_shp: Union[str, Path],
-        original_dem,
+        dem: np.ndarray,
+        catchment_shp: str | Path,
+        breaches_shp: str | Path,
+        streams_shp: str | Path,
+        original_dem: rasterio.io.DatasetReader,
         elevation_increase: float = 1000,
-) -> Tuple["np.ndarray", "np.ndarray"]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
     Returns the modified DEM and a boolean mask identifying boundary cells.
@@ -417,10 +414,10 @@ def _interpolate_points(line, distance: float) -> List[Point]:
 
 
 def extract_stream_starts_ends(
-        streams: "gpd.GeoDataFrame",
-        output_dir: Union[str, Path],
+        streams: gpd.GeoDataFrame,
+        output_dir: str | Path,
         save_to_shapefile: bool = True,
-) -> Tuple["gpd.GeoDataFrame", "gpd.GeoDataFrame"]:
+) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Extract stream segment start/end points that are not connected to others.
 
     Returns two GeoDataFrames: (unconnected_start_gdf, unconnected_end_gdf).

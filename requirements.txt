@@ -1,6 +1,0 @@
-fiona
-geopandas
-numpy==1.*
-pysheds
-rasterio
-shapely

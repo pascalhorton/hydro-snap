@@ -2,8 +2,45 @@
 requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "hydro-snap"
+version = "0.1.4"
+description = "DEM reconditioning for hydrological applications"
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+  {name = "Pascal Horton", email = "pascal.horton@unibe.ch"},
+]
+license = { text = "MIT" }
+
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+  "fiona",
+  "geopandas",
+  "numpy",
+  "pysheds",
+  "rasterio",
+  "shapely",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/pascalhorton/hydro-snap"
+"Bug Tracker" = "https://github.com/pascalhorton/hydro-snap/issues"
+
 [tool.black]
 line-length = 88
 
 [tool.isort]
 profile = "black"
+
+[tool.setuptools]
+packages = ["hydro_snap"]
