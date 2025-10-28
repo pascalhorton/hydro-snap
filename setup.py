@@ -1,6 +1,6 @@
 from setuptools import setup
 
-with open('README.md') as f:
+with open("README.md") as f:
     readme = f.read()
 
 setup(
@@ -11,17 +11,17 @@ setup(
     description="DEM reconditioning for hydrological applications",
     long_description=readme,
     long_description_content_type="text/markdown",
-    packages=['hydro_snap'],
-    package_dir={'hydro_snap': 'hydro_snap'},
+    packages=["hydro_snap"],
+    package_dir={"hydro_snap": "hydro_snap"},
     zip_safe=False,
     python_requires=">=3.8",
     install_requires=[
-        'fiona',
-        'geopandas',
-        'numpy==1.*',
-        'pysheds',
-        'rasterio',
-        'shapely'
+        "fiona",
+        "geopandas",
+        "numpy==1.*",
+        "pysheds",
+        "rasterio",
+        "shapely",
     ],
     classifiers=[
         "Programming Language :: Python",

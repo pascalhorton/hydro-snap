@@ -1,34 +1,36 @@
 """Utilities to recondition a DEM (digital elevation model) using a stream network.
 
-This module provides a high-level function `recondition_dem` and several
+This module provides a high-level function `recondition_dem` and a set of
 helpers to prepare stream vectors, enforce CRS, build temporary walls at
-catchment borders and perform DEM corrections.
+catchment borders, and perform DEM corrections.
 """
 
 import math
 from pathlib import Path
+from typing import List, Optional, Tuple, Union
 
 import geopandas as gpd
 import numpy as np
 import rasterio
 import rasterio.features
+from affine import Affine
+from pysheds.grid import Grid
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from shapely.geometry import Point, mapping
-from pysheds.grid import Grid
 
 
 def recondition_dem(
-        dem_raster,
-        streams_shp,
-        output_dir,
-        delta=0.0001,
-        outlet_shp=None,
-        catchment_shp=None,
-        breaches_shp=None,
-        walls_height=1000,
-        epsg_code=None,
-):
+        dem_raster: Union[str, Path],
+        streams_shp: Union[str, Path],
+        output_dir: Union[str, Path],
+        delta: float = 0.0001,
+        outlet_shp: Optional[Union[str, Path]] = None,
+        catchment_shp: Optional[Union[str, Path]] = None,
+        breaches_shp: Optional[Union[str, Path]] = None,
+        walls_height: float = 1000,
+        epsg_code: Optional[int] = None,
+) -> None:
     """Recondition the DEM based on the stream network.
 
     Parameters
@@ -51,7 +53,8 @@ def recondition_dem(
         Breaches (lines) shapefile used to allow water leaving the catchment
         (required if `catchment_shp` is provided).
     walls_height : float, optional
-        Height of temporary walls placed at the catchment border (default: 1000).
+        Height of temporary walls placed at the catchment border
+        (default: 1000).
     epsg_code : int, optional
         EPSG code used to set CRS when missing (default: None).
     """
@@ -74,7 +77,8 @@ def recondition_dem(
     if catchment_shp:
         if not breaches_shp:
             raise ValueError(
-                "A shapefile of breaches must be provided to allow water exiting the catchment."
+                "A shapefile of breaches must be provided to allow "
+                "water exiting the catchment."
             )
         new_dem, boundaries = _build_walls_at_catchment_borders(
             new_dem,
@@ -88,7 +92,8 @@ def recondition_dem(
         if breaches_shp:
             # Provided breaches without a catchment is suspicious but not fatal
             raise Warning(
-                "A shapefile of breaches was provided but no catchment shapefile was provided."
+                "A shapefile of breaches was provided but no catchment "
+                "shapefile was provided."
             )
 
     output_dem_path = output_dir / "corrected_dem_pre_pysheds.tif"
@@ -138,7 +143,10 @@ def recondition_dem(
     print(f"Corrected DEM saved to {output_dem_path}")
 
 
-def _open_raster_check_crs(raster_path, epsg_code):
+def _open_raster_check_crs(
+        raster_path: Union[str, Path],
+        epsg_code: Optional[int]
+) -> "rasterio.io.DatasetReader":
     """Open a raster and ensure CRS is defined (or set it).
 
     Returns a rasterio DatasetReader.
@@ -156,7 +164,10 @@ def _open_raster_check_crs(raster_path, epsg_code):
     return src
 
 
-def _open_vector_check_crs(shapefile_path, epsg_code):
+def _open_vector_check_crs(
+        shapefile_path: Union[str, Path],
+        epsg_code: Optional[int],
+) -> "gpd.GeoDataFrame":
     """Open a vector file and ensure CRS is defined (or set it).
 
     Returns a GeoDataFrame with the expected CRS.
@@ -166,7 +177,8 @@ def _open_vector_check_crs(shapefile_path, epsg_code):
     if not gdf.crs:
         if not epsg_code:
             raise ValueError(
-                f"The CRS of the shapefile {shapefile_path} is not defined.")
+                f"The CRS of the shapefile {shapefile_path} is not defined."
+            )
         gdf.set_crs(epsg=epsg_code, inplace=True)
     elif epsg_code:
         if gdf.crs.to_epsg() != epsg_code:
@@ -175,7 +187,10 @@ def _open_vector_check_crs(shapefile_path, epsg_code):
     return gdf
 
 
-def _prepare_streams(streams_shp, output_dir):
+def _prepare_streams(
+        streams_shp: Union[str, Path],
+        output_dir: Union[str, Path],
+) -> "gpd.GeoDataFrame":
     """Prepare the streams by adding a rank to each stream.
 
     The function writes `streams.shp` to `output_dir` and returns the
@@ -195,8 +210,9 @@ def _prepare_streams(streams_shp, output_dir):
         rank = 1
         start_point = row.geometry
         streams_near = list(streams.sindex.nearest(start_point))
-        streams_idx = [i for i in streams_near[1] if
-                       start_point.touches(streams.geometry[i])]
+        streams_idx = [
+            i for i in streams_near[1] if start_point.touches(streams.geometry[i])
+        ]
         streams_connected = streams.loc[streams_idx]
 
         _iterate_stream_rank(streams, streams_connected, rank)
@@ -206,7 +222,11 @@ def _prepare_streams(streams_shp, output_dir):
     return streams
 
 
-def _iterate_stream_rank(streams, streams_touching, rank):
+def _iterate_stream_rank(
+        streams: "gpd.GeoDataFrame",
+        streams_touching: "gpd.GeoDataFrame",
+        rank: int,
+) -> None:
     """Recursively set a rank for connected stream segments."""
     streams.loc[streams_touching.index, "rank"] = rank
     rank += 1
@@ -215,8 +235,9 @@ def _iterate_stream_rank(streams, streams_touching, rank):
         start_point = Point(stream.geometry.coords[0])
 
         streams_near = list(streams.sindex.nearest(start_point))
-        streams_idx = [i for i in streams_near[1] if
-                       start_point.touches(streams.geometry[i])]
+        streams_idx = [
+            i for i in streams_near[1] if start_point.touches(streams.geometry[i])
+        ]
         streams_connected = streams.loc[streams_idx]
 
         streams_connected = streams_connected[streams_connected["rank"] == 0]
@@ -225,7 +246,11 @@ def _iterate_stream_rank(streams, streams_touching, rank):
             _iterate_stream_rank(streams, streams_connected, rank)
 
 
-def _recondition_dem(original_dem, streams, delta):
+def _recondition_dem(
+        original_dem,
+        streams: "gpd.GeoDataFrame",
+        delta: float,
+) -> "np.ndarray":
     """Correct the DEM based on the stream network.
 
     This walks ordered cells along each stream and ensures a downslope
@@ -248,13 +273,18 @@ def _recondition_dem(original_dem, streams, delta):
         if not line or not line.is_valid:
             continue
 
-        cell_ids = _get_ordered_cells(line, original_dem.transform, original_dem.shape,
-                                      resol / 2)
+        cell_ids = _get_ordered_cells(
+            line, original_dem.transform, original_dem.shape, resol / 2
+        )
 
         for idx in range(len(cell_ids) - 1):
             i, j = cell_ids[idx]
-            if i == 0 or j == 0 or i == new_dem.shape[0] - 1 or j == new_dem.shape[
-                1] - 1:
+            if (
+                    i == 0
+                    or j == 0
+                    or i == new_dem.shape[0] - 1
+                    or j == new_dem.shape[1] - 1
+            ):
                 continue
 
             tile_dem = new_dem[i - 1: i + 2, j - 1: j + 2]
@@ -275,13 +305,13 @@ def _recondition_dem(original_dem, streams, delta):
 
 
 def _build_walls_at_catchment_borders(
-        dem,
-        catchment_shp,
-        breaches_shp,
-        streams_shp,
+        dem: "np.ndarray",
+        catchment_shp: Union[str, Path],
+        breaches_shp: Union[str, Path],
+        streams_shp: Union[str, Path],
         original_dem,
-        elevation_increase=1000,
-):
+        elevation_increase: float = 1000,
+) -> Tuple["np.ndarray", "np.ndarray"]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
     Returns the modified DEM and a boolean mask identifying boundary cells.
@@ -343,7 +373,12 @@ def _build_walls_at_catchment_borders(
     return dem, boundaries
 
 
-def _get_ordered_cells(line, transform, shape, resolution):
+def _get_ordered_cells(
+        line,
+        transform: Affine,
+        shape: Tuple[int, int],
+        resolution: float,
+) -> List[Tuple[int, int]]:
     """Return ordered raster cell (row, col) indices overlapped by the line."""
     cell_ids = []
 
@@ -368,7 +403,7 @@ def _get_ordered_cells(line, transform, shape, resolution):
     return cell_ids
 
 
-def _interpolate_points(line, distance):
+def _interpolate_points(line, distance: float) -> List[Point]:
     """Interpolate points along a LineString at a given distance interval."""
     current_distance = 0.0
     coords = []
@@ -381,7 +416,11 @@ def _interpolate_points(line, distance):
     return coords
 
 
-def extract_stream_starts_ends(streams, output_dir, save_to_shapefile=True):
+def extract_stream_starts_ends(
+        streams: "gpd.GeoDataFrame",
+        output_dir: Union[str, Path],
+        save_to_shapefile: bool = True,
+) -> Tuple["gpd.GeoDataFrame", "gpd.GeoDataFrame"]:
     """Extract stream segment start/end points that are not connected to others.
 
     Returns two GeoDataFrames: (unconnected_start_gdf, unconnected_end_gdf).
@@ -408,12 +447,14 @@ def extract_stream_starts_ends(streams, output_dir, save_to_shapefile=True):
         end_neighbors = list(sindex.nearest(end_point))
 
         start_connected = any(
-            start_point.touches(streams.geometry[i]) for i in start_neighbors[1] if
-            streams.geometry[i] != line
+            start_point.touches(streams.geometry[i])
+            for i in start_neighbors[1]
+            if streams.geometry[i] != line
         )
         end_connected = any(
-            end_point.touches(streams.geometry[i]) for i in end_neighbors[1] if
-            streams.geometry[i] != line
+            end_point.touches(streams.geometry[i])
+            for i in end_neighbors[1]
+            if streams.geometry[i] != line
         )
 
         if not start_connected:
@@ -425,9 +466,11 @@ def extract_stream_starts_ends(streams, output_dir, save_to_shapefile=True):
     unconnected_end_gdf = gpd.GeoDataFrame(geometry=unconnected_end)
 
     if save_to_shapefile:
-        unconnected_start_gdf.to_file(str(stream_starts_shp), crs=streams.crs,
-                                      engine="fiona")
-        unconnected_end_gdf.to_file(str(stream_ends_shp), crs=streams.crs,
-                                    engine="fiona")
+        unconnected_start_gdf.to_file(
+            str(stream_starts_shp), crs=streams.crs, engine="fiona"
+        )
+        unconnected_end_gdf.to_file(
+            str(stream_ends_shp), crs=streams.crs, engine="fiona"
+        )
 
     return unconnected_start_gdf, unconnected_end_gdf
