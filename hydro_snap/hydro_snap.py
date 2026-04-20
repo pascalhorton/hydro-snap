@@ -6,9 +6,10 @@ catchment borders, and perform DEM corrections.
 """
 
 import math
+import warnings
+from collections import deque
 from pathlib import Path
 from typing import List, Literal, Tuple
-import warnings
 
 from affine import Affine
 import geopandas as gpd
@@ -32,12 +33,13 @@ def recondition_dem(
         streams_shp: str | Path,
         output_dir: str | Path,
         delta: float = 0.0001,
-        outlet_shp: str | Path | None = None,
-        catchment_shp: str | Path | None = None,
-        breaches_shp: str | Path | None = None,
+        outlet_shp: str | Path = None,
+        catchment_shp: str | Path = None,
+        breaches_shp: str | Path = None,
         walls_height: float = 1000,
-        epsg_code: int | None = None,
+        epsg_code: int = None,
         stream_orientation: Literal['downstream', 'upstream'] = 'downstream',
+        min_accumulation: int = 10000,
 ) -> None:
     """Recondition the DEM based on the stream network.
 
@@ -72,6 +74,9 @@ def recondition_dem(
         means each line is digitized from upstream to downstream. 'upstream'
         means lines go from downstream to upstream and will be reversed before
         processing (default: 'downstream').
+    min_accumulation : int, optional
+        Minimum flow accumulation cell count used to snap the outlet point to
+        a high-accumulation cell (default: 10000).
     """
 
     if isinstance(output_dir, str):
@@ -81,80 +86,81 @@ def recondition_dem(
         output_dir.mkdir(parents=True)
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
+    try:
+        streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
 
-    streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
+        streams.to_file(output_dir / "streams.shp")
 
-    streams.to_file(output_dir / "streams.shp")
+        # First pass correction following stream lines
+        new_dem = _recondition_dem(original_dem, streams, delta)
 
-    # First pass correction following stream lines
-    new_dem = _recondition_dem(original_dem, streams, delta)
-
-    boundaries = None
-    if catchment_shp:
-        new_dem, boundaries = _build_walls_at_catchment_borders(
-            new_dem,
-            catchment_shp,
-            breaches_shp,
-            streams_shp,
-            original_dem,
-            elevation_increase=int(walls_height),
-        )
-    else:
-        if breaches_shp:
-            # Provided breaches without a catchment is suspicious but not fatal
-            raise Warning(
-                "A shapefile of breaches was provided but no catchment "
-                "shapefile was provided."
+        boundaries = None
+        if catchment_shp:
+            new_dem, boundaries = _build_walls_at_catchment_borders(
+                new_dem,
+                catchment_shp,
+                breaches_shp,
+                streams_shp,
+                original_dem,
+                elevation_increase=walls_height,
             )
+        else:
+            if breaches_shp:
+                warnings.warn(
+                    "A shapefile of breaches was provided but no catchment "
+                    "shapefile was provided.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
-    output_dem_path = output_dir / "corrected_dem_pre_pysheds.tif"
-    with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
-        dst.write(new_dem, 1)
+        output_dem_path = output_dir / "corrected_dem_pre_pysheds.tif"
+        with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
+            dst.write(new_dem, 1)
 
-    # Use pysheds to fix pits/flats and compute flow fields
-    pysheds_grid = Grid.from_raster(str(output_dem_path))
-    pysheds_dem = pysheds_grid.read_raster(str(output_dem_path))
-    pit_filled_dem = pysheds_grid.fill_pits(pysheds_dem)
-    flooded_dem = pysheds_grid.fill_depressions(pit_filled_dem)
-    inflated_dem = pysheds_grid.resolve_flats(flooded_dem)
+        # Use pysheds to fix pits/flats and compute flow fields
+        pysheds_grid = Grid.from_raster(str(output_dem_path))
+        pysheds_dem = pysheds_grid.read_raster(str(output_dem_path))
+        pit_filled_dem = pysheds_grid.fill_pits(pysheds_dem)
+        flooded_dem = pysheds_grid.fill_depressions(pit_filled_dem)
+        inflated_dem = pysheds_grid.resolve_flats(flooded_dem)
 
-    fdir = pysheds_grid.flowdir(inflated_dem, nodata_out=np.int64(0))
-    acc = pysheds_grid.accumulation(fdir, nodata_out=np.float64(-9999))
+        fdir = pysheds_grid.flowdir(inflated_dem, nodata_out=np.int64(0))
+        acc = pysheds_grid.accumulation(fdir, nodata_out=np.float64(-9999))
 
-    # Remove temporary walls before final save
-    if catchment_shp and boundaries is not None:
-        inflated_dem[boundaries] -= walls_height
+        # Remove temporary walls before final save
+        if catchment_shp and boundaries is not None:
+            inflated_dem[boundaries] -= walls_height
 
-    output_dem_path = output_dir / "corrected_dem_final.tif"
-    with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
-        dst.write(inflated_dem, 1)
+        output_dem_path = output_dir / "corrected_dem_final.tif"
+        with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
+            dst.write(inflated_dem, 1)
 
-    if outlet_shp:
-        outlet = gpd.read_file(outlet_shp)
-        x, y = outlet.geometry.x[0], outlet.geometry.y[0]
+        if outlet_shp:
+            outlet = gpd.read_file(outlet_shp)
+            x, y = outlet.geometry.x[0], outlet.geometry.y[0]
 
-        # Snap the outlet to a high accumulation cell and compute catchment
-        x_snap, y_snap = pysheds_grid.snap_to_mask(acc > 10000, (x, y))
-        catchment = pysheds_grid.catchment(x=x_snap, y=y_snap, fdir=fdir)
+            # Snap the outlet to a high accumulation cell and compute catchment
+            x_snap, y_snap = pysheds_grid.snap_to_mask(acc > min_accumulation, (x, y))
+            catchment = pysheds_grid.catchment(x=x_snap, y=y_snap, fdir=fdir)
 
-        output_catchment_path = output_dir / "catchment.tif"
-        with rasterio.open(output_catchment_path, "w", **original_dem.profile) as dst:
-            dst.write(catchment, 1)
+            output_catchment_path = output_dir / "catchment.tif"
+            with rasterio.open(output_catchment_path, "w", **original_dem.profile) as dst:
+                dst.write(catchment, 1)
 
-    output_fdir_path = output_dir / "flow_direction.tif"
-    with rasterio.open(output_fdir_path, "w", **original_dem.profile) as dst:
-        dst.write(fdir, 1)
+        output_fdir_path = output_dir / "flow_direction.tif"
+        with rasterio.open(output_fdir_path, "w", **original_dem.profile) as dst:
+            dst.write(fdir, 1)
 
-    output_acc_path = output_dir / "flow_accumulation.tif"
-    with rasterio.open(output_acc_path, "w", **original_dem.profile) as dst:
-        dst.write(acc, 1)
-
-    original_dem.close()
+        output_acc_path = output_dir / "flow_accumulation.tif"
+        with rasterio.open(output_acc_path, "w", **original_dem.profile) as dst:
+            dst.write(acc, 1)
+    finally:
+        original_dem.close()
 
     print(f"Corrected DEM saved to {output_dem_path}")
 
 
-def _open_raster_check_crs(raster_path: str | Path, epsg_code: int | None):
+def _open_raster_check_crs(raster_path: str | Path, epsg_code: int | None) -> rasterio.io.DatasetReader:
     """Open a raster and ensure CRS is defined (or set it).
 
     Returns a rasterio DatasetReader.
@@ -198,7 +204,7 @@ def _open_vector_check_crs(
 def _prepare_streams(
         streams_shp: str | Path,
         output_dir: str | Path,
-        stream_orientation: str | None = "downstream"
+        stream_orientation: Literal['downstream', 'upstream'] = 'downstream'
 ) -> gpd.GeoDataFrame:
     """Prepare the streams by adding a rank to each stream.
 
@@ -244,23 +250,25 @@ def _iterate_stream_rank(
         streams_touching: gpd.GeoDataFrame,
         rank: int,
 ) -> None:
-    """Recursively set a rank for connected stream segments."""
-    streams.loc[streams_touching.index, "rank"] = rank
-    rank += 1
+    """Assign ranks to connected stream segments using iterative BFS."""
+    queue = deque([(streams_touching, rank)])
 
-    for _idx, stream in streams_touching.iterrows():
-        start_point = Point(stream.geometry.coords[0])
+    while queue:
+        current_streams, current_rank = queue.popleft()
+        streams.loc[current_streams.index, "rank"] = current_rank
 
-        streams_near = list(streams.sindex.nearest(start_point))
-        streams_idx = [
-            i for i in streams_near[1] if start_point.touches(streams.geometry[i])
-        ]
-        streams_connected = streams.loc[streams_idx]
+        for _idx, stream in current_streams.iterrows():
+            start_point = Point(stream.geometry.coords[0])
 
-        streams_connected = streams_connected[streams_connected["rank"] == 0]
+            streams_near = list(streams.sindex.nearest(start_point))
+            streams_idx = [
+                i for i in streams_near[1] if start_point.touches(streams.geometry[i])
+            ]
+            streams_connected = streams.loc[streams_idx]
+            streams_connected = streams_connected[streams_connected["rank"] == 0]
 
-        if not streams_connected.empty:
-            _iterate_stream_rank(streams, streams_connected, rank)
+            if not streams_connected.empty:
+                queue.append((streams_connected, current_rank + 1))
 
 
 def _recondition_dem(
@@ -327,7 +335,7 @@ def _build_walls_at_catchment_borders(
         breaches_shp: str | Path | None,
         streams_shp: str | Path,
         original_dem: rasterio.io.DatasetReader,
-        elevation_increase: float = 1000,
+        elevation_increase: float | None = 1000,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
@@ -369,14 +377,15 @@ def _build_walls_at_catchment_borders(
     for i_o, j_o in overlap_indices:
         for i in range(i_o - 1, i_o + 2):
             for j in range(j_o - 1, j_o + 2):
+                if not (0 <= i < dem.shape[0] and 0 <= j < dem.shape[1]):
+                    continue
                 if rivers_rasterized[i, j]:
                     boundaries[i, j] = False
                     continue
                 if not catchment_rasterized[i, j] and not boundaries[i, j]:
                     boundaries[i, j] = True
 
-    breach_source = breaches_shp if breaches_shp is not None else streams_shp
-    breach_gdf = gpd.read_file(breach_source)
+    breach_gdf = gpd.read_file(breaches_shp) if breaches_shp is not None else rivers
     breaches_rasterized = rasterio.features.geometry_mask(
         [mapping(geom) for geom in breach_gdf.geometry],
         transform=original_dem.transform,
@@ -452,7 +461,7 @@ def _interpolate_points(line, distance: float) -> List[Point]:
 
 def extract_stream_starts_ends(
         streams: gpd.GeoDataFrame,
-        output_dir: str | Path,
+        output_dir: str | Path | None = None,
         save_to_shapefile: bool = True,
 ) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Extract stream segment start/end points that are not connected to others.
@@ -461,9 +470,6 @@ def extract_stream_starts_ends(
     If `save_to_shapefile` is True the points are written to the `output_dir`.
     """
     print("Finding stream starts/ends...")
-
-    stream_starts_shp = output_dir / "stream_starts.shp"
-    stream_ends_shp = output_dir / "stream_ends.shp"
 
     sindex = streams.sindex
 
@@ -500,11 +506,14 @@ def extract_stream_starts_ends(
     unconnected_end_gdf = gpd.GeoDataFrame(geometry=unconnected_end)
 
     if save_to_shapefile:
+        if output_dir is None:
+            raise ValueError("output_dir must be provided when save_to_shapefile=True")
+        output_dir = Path(output_dir)
         unconnected_start_gdf.to_file(
-            str(stream_starts_shp), crs=streams.crs, engine="fiona"
+            output_dir / "stream_starts.shp", crs=streams.crs, engine="fiona"
         )
         unconnected_end_gdf.to_file(
-            str(stream_ends_shp), crs=streams.crs, engine="fiona"
+            output_dir / "stream_ends.shp", crs=streams.crs, engine="fiona"
         )
 
     return unconnected_start_gdf, unconnected_end_gdf
