@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning(https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add support for stream orientation in DEM reconditioning.
-- Automatically identifies and opens the lowest-elevation boundary cell for catchment polygons lacking an intersecting breach or stream to ensure drainage.
+- Automatically identifies and opens the lowest-elevation boundary cell for catchment 
+  polygons lacking an intersecting breach or stream to ensure drainage.
 
 ### Changed
 
-- Make breach shapefiles optional for catchment-based DEM reconditioning
+- Make breach shapefiles optional for catchment-based DEM reconditioning.
+- Various code improvements.
 
 
 ## 0.1.5 - 2025-10-28
