@@ -8,6 +8,7 @@ catchment borders, and perform DEM corrections.
 import math
 from pathlib import Path
 from typing import List, Literal, Tuple
+import warnings
 
 from affine import Affine
 import geopandas as gpd
@@ -19,6 +20,12 @@ from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from shapely.geometry import LineString, Point, mapping
 
+warnings.filterwarnings(
+    "ignore",
+    message="Measured \\(M\\) geometry types are not supported",
+    category=UserWarning,
+    module="pyogrio",
+)
 
 def recondition_dem(
         dem_raster: str | Path,
@@ -51,8 +58,10 @@ def recondition_dem(
         Catchment polygon shapefile. If provided, flow will be constrained to
         the catchment (default: None).
     breaches_shp : str, optional
-        Breaches (lines) shapefile used to allow water leaving the catchment
-        (required if `catchment_shp` is provided).
+        Breaches (lines) shapefile used to allow water leaving the catchment.
+        If not provided, the stream network is used as breaches. For polygons
+        not intersected by any breach or stream, the lowest-elevation boundary
+        cell is opened automatically (default: None).
     walls_height : float, optional
         Height of temporary walls placed at the catchment border
         (default: 1000).
@@ -82,11 +91,6 @@ def recondition_dem(
 
     boundaries = None
     if catchment_shp:
-        if not breaches_shp:
-            raise ValueError(
-                "A shapefile of breaches must be provided to allow "
-                "water exiting the catchment."
-            )
         new_dem, boundaries = _build_walls_at_catchment_borders(
             new_dem,
             catchment_shp,
@@ -217,6 +221,7 @@ def _prepare_streams(
 
     _, stream_ends = extract_stream_starts_ends(streams, output_dir)
 
+    print("Compute stream ranks...")
     streams["rank"] = 0
     for _idx, row in stream_ends.iterrows():
         rank = 1
@@ -319,7 +324,7 @@ def _recondition_dem(
 def _build_walls_at_catchment_borders(
         dem: np.ndarray,
         catchment_shp: str | Path,
-        breaches_shp: str | Path,
+        breaches_shp: str | Path | None,
         streams_shp: str | Path,
         original_dem: rasterio.io.DatasetReader,
         elevation_increase: float = 1000,
@@ -370,15 +375,32 @@ def _build_walls_at_catchment_borders(
                 if not catchment_rasterized[i, j] and not boundaries[i, j]:
                     boundaries[i, j] = True
 
-    breaches = gpd.read_file(breaches_shp)
+    breach_source = breaches_shp if breaches_shp is not None else streams_shp
+    breach_gdf = gpd.read_file(breach_source)
     breaches_rasterized = rasterio.features.geometry_mask(
-        [mapping(geom) for geom in breaches.geometry],
+        [mapping(geom) for geom in breach_gdf.geometry],
         transform=original_dem.transform,
         all_touched=True,
         invert=True,
         out_shape=dem.shape,
     )
     boundaries[breaches_rasterized] = False
+
+    for polygon in catchment.geometry:
+        poly_boundary_mask = rasterio.features.geometry_mask(
+            [mapping(polygon.boundary)],
+            transform=original_dem.transform,
+            all_touched=True,
+            invert=True,
+            out_shape=dem.shape,
+        )
+        has_breach = np.any(poly_boundary_mask & breaches_rasterized)
+        if not has_breach:
+            wall_cells = np.argwhere(poly_boundary_mask & boundaries)
+            if len(wall_cells) > 0:
+                elevations = dem[wall_cells[:, 0], wall_cells[:, 1]]
+                r, c = wall_cells[np.argmin(elevations)]
+                boundaries[r, c] = False
 
     dem[boundaries] += elevation_increase
 
