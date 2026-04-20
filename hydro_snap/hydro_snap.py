@@ -22,7 +22,7 @@ from shapely.geometry import LineString, Point, mapping
 
 warnings.filterwarnings(
     "ignore",
-    message="Measured \\(M\\) geometry types are not supported",
+    message="Measured",
     category=UserWarning,
     module="pyogrio",
 )
