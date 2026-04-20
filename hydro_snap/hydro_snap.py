@@ -7,7 +7,7 @@ catchment borders, and perform DEM corrections.
 
 import math
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 
 from affine import Affine
 import geopandas as gpd
@@ -17,7 +17,7 @@ import rasterio
 import rasterio.features
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
-from shapely.geometry import Point, mapping
+from shapely.geometry import LineString, Point, mapping
 
 
 def recondition_dem(
@@ -30,6 +30,7 @@ def recondition_dem(
         breaches_shp: str | Path | None = None,
         walls_height: float = 1000,
         epsg_code: int | None = None,
+        stream_orientation: Literal['downstream', 'upstream'] = 'downstream',
 ) -> None:
     """Recondition the DEM based on the stream network.
 
@@ -57,6 +58,11 @@ def recondition_dem(
         (default: 1000).
     epsg_code : int, optional
         EPSG code used to set CRS when missing (default: None).
+    stream_orientation : {'downstream', 'upstream'}, optional
+        Orientation of lines in the stream shapefile. 'downstream' (default)
+        means each line is digitized from upstream to downstream. 'upstream'
+        means lines go from downstream to upstream and will be reversed before
+        processing (default: 'downstream').
     """
 
     if isinstance(output_dir, str):
@@ -67,7 +73,8 @@ def recondition_dem(
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
 
-    streams = _prepare_streams(streams_shp, output_dir)
+    streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
+
     streams.to_file(output_dir / "streams.shp")
 
     # First pass correction following stream lines
@@ -187,6 +194,7 @@ def _open_vector_check_crs(
 def _prepare_streams(
         streams_shp: str | Path,
         output_dir: str | Path,
+        stream_orientation: str | None = "downstream"
 ) -> gpd.GeoDataFrame:
     """Prepare the streams by adding a rank to each stream.
 
@@ -199,6 +207,13 @@ def _prepare_streams(
 
     # Keep only geometry column
     streams = streams[["geometry"]]
+
+    # Change stream orientation if needed
+    if stream_orientation == 'upstream':
+        print("Changing stream orientation of upstream streams ")
+        streams.geometry = streams.geometry.apply(
+            lambda g: LineString(g.coords[::-1])
+        )
 
     _, stream_ends = extract_stream_starts_ends(streams, output_dir)
 

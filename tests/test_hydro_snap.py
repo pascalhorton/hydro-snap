@@ -70,3 +70,16 @@ def test_recondition_dem_changes_cells(tmp_path):
     # At least one cell modified
     assert not np.allclose(new_dem, base)
     src.close()
+
+
+def test_get_ordered_cells_reversed():
+    line = LineString([(0.5, 4.5), (4.5, 0.5)])
+    line_reversed = LineString([(4.5, 0.5), (0.5, 4.5)])
+    transform = from_origin(0, 5, 1, 1)
+    shape = (5, 5)
+
+    cells = _get_ordered_cells(line, transform, shape, 0.5)
+    cells_reversed = _get_ordered_cells(line_reversed, transform, shape, 0.5)
+
+    assert cells[0] == cells_reversed[-1]
+    assert cells[-1] == cells_reversed[0]
