@@ -86,7 +86,7 @@ def recondition_dem(
         output_dir.mkdir(parents=True)
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
-    write_profile = {**original_dem.profile, "BIGTIFF": "YES"}
+    write_profile = {**original_dem.profile, "BIGTIFF": "YES", "compress": "ZSTD", "predictor": 2}
     try:
         streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
 
