@@ -40,6 +40,7 @@ def recondition_dem(
         epsg_code: int = None,
         stream_orientation: Literal['downstream', 'upstream'] = 'downstream',
         min_accumulation: int = 10000,
+        simplification_tolerance: float | None = 0.5,
 ) -> None:
     """Recondition the DEM based on the stream network.
 
@@ -77,6 +78,13 @@ def recondition_dem(
     min_accumulation : int, optional
         Minimum flow accumulation cell count used to snap the outlet point to
         a high-accumulation cell (default: 10000).
+    simplification_tolerance : float, optional
+        Simplify stream, breach, and catchment geometries before processing,
+        expressed as a fraction of the DEM pixel size. The actual tolerance
+        in CRS units is ``simplification_tolerance × dem_resolution``. Set to
+        None or ``0`` to disable simplification. The default ``0.5`` (half a pixel)
+        is guaranteed to produce identical raster output — no vertex removed
+        at this scale can change which pixel gets burned (default: 0.5).
     """
 
     if isinstance(output_dir, str):
@@ -87,13 +95,14 @@ def recondition_dem(
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
     write_profile = {**original_dem.profile, "BIGTIFF": "YES", "compress": "ZSTD", "predictor": 2}
+    simplification_tolerance_m = simplification_tolerance * original_dem.res[0]
     try:
         streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
 
         streams.to_file(output_dir / "streams.shp")
 
         # First pass correction following stream lines
-        new_dem = _recondition_dem(original_dem, streams, delta)
+        new_dem = _recondition_dem(original_dem, streams, delta, simplification_tolerance_m)
 
         boundaries = None
         if catchment_shp:
@@ -104,6 +113,7 @@ def recondition_dem(
                 streams_shp,
                 original_dem,
                 elevation_increase=walls_height,
+                simplification_tolerance_m=simplification_tolerance_m,
             )
         else:
             if breaches_shp:
@@ -276,6 +286,7 @@ def _recondition_dem(
         original_dem: rasterio.io.DatasetReader,
         streams: gpd.GeoDataFrame,
         delta: float,
+        simplification_tolerance_m: float | None = 0,
 ) -> np.ndarray:
     """Correct the DEM based on the stream network.
 
@@ -283,6 +294,12 @@ def _recondition_dem(
     progression by lowering neighbouring cells when needed.
     """
     print("Correcting DEM...")
+
+    if simplification_tolerance_m and simplification_tolerance_m > 0:
+        streams = streams.copy()
+        streams.geometry = streams.geometry.simplify(
+            simplification_tolerance_m, preserve_topology=True
+        )
 
     resol = original_dem.res[0]
     distances = resol * np.array(
@@ -337,6 +354,7 @@ def _build_walls_at_catchment_borders(
         streams_shp: str | Path,
         original_dem: rasterio.io.DatasetReader,
         elevation_increase: float | None = 1000,
+        simplification_tolerance_m: float | None = 0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
@@ -345,6 +363,13 @@ def _build_walls_at_catchment_borders(
     print("Building walls at catchment borders...")
 
     catchment = gpd.read_file(catchment_shp)
+
+    if simplification_tolerance_m and simplification_tolerance_m > 0:
+        catchment = catchment.copy()
+        catchment.geometry = catchment.geometry.simplify(
+            simplification_tolerance_m,
+            preserve_topology=True
+        )
 
     catchment_boundary = catchment.geometry.boundary
     boundaries = rasterio.features.geometry_mask(
@@ -363,6 +388,12 @@ def _build_walls_at_catchment_borders(
     )
 
     rivers = gpd.read_file(streams_shp)
+
+    if simplification_tolerance_m > 0:
+        rivers = rivers.copy()
+        rivers.geometry = rivers.geometry.simplify(
+            simplification_tolerance_m, preserve_topology=True
+        )
 
     rivers_rasterized = rasterio.features.geometry_mask(
         [mapping(geom) for geom in rivers.geometry],
@@ -386,7 +417,15 @@ def _build_walls_at_catchment_borders(
                 if not catchment_rasterized[i, j] and not boundaries[i, j]:
                     boundaries[i, j] = True
 
-    breach_gdf = gpd.read_file(breaches_shp) if breaches_shp is not None else rivers
+    if breaches_shp is not None:
+        breach_gdf = gpd.read_file(breaches_shp)
+        if simplification_tolerance_m > 0:
+            breach_gdf = breach_gdf.copy()
+            breach_gdf.geometry = breach_gdf.geometry.simplify(
+                simplification_tolerance_m, preserve_topology=True
+            )
+    else:
+        breach_gdf = rivers
     breaches_rasterized = rasterio.features.geometry_mask(
         [mapping(geom) for geom in breach_gdf.geometry],
         transform=original_dem.transform,
