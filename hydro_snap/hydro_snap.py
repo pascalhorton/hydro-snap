@@ -86,6 +86,7 @@ def recondition_dem(
         output_dir.mkdir(parents=True)
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
+    write_profile = {**original_dem.profile, "BIGTIFF": "YES"}
     try:
         streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
 
@@ -114,7 +115,7 @@ def recondition_dem(
                 )
 
         output_dem_path = output_dir / "corrected_dem_pre_pysheds.tif"
-        with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
+        with rasterio.open(output_dem_path, "w", **write_profile) as dst:
             dst.write(new_dem, 1)
 
         # Use pysheds to fix pits/flats and compute flow fields
@@ -132,7 +133,7 @@ def recondition_dem(
             inflated_dem[boundaries] -= walls_height
 
         output_dem_path = output_dir / "corrected_dem_final.tif"
-        with rasterio.open(output_dem_path, "w", **original_dem.profile) as dst:
+        with rasterio.open(output_dem_path, "w", **write_profile) as dst:
             dst.write(inflated_dem, 1)
 
         if outlet_shp:
@@ -144,15 +145,15 @@ def recondition_dem(
             catchment = pysheds_grid.catchment(x=x_snap, y=y_snap, fdir=fdir)
 
             output_catchment_path = output_dir / "catchment.tif"
-            with rasterio.open(output_catchment_path, "w", **original_dem.profile) as dst:
+            with rasterio.open(output_catchment_path, "w", **write_profile) as dst:
                 dst.write(catchment, 1)
 
         output_fdir_path = output_dir / "flow_direction.tif"
-        with rasterio.open(output_fdir_path, "w", **original_dem.profile) as dst:
+        with rasterio.open(output_fdir_path, "w", **write_profile) as dst:
             dst.write(fdir, 1)
 
         output_acc_path = output_dir / "flow_accumulation.tif"
-        with rasterio.open(output_acc_path, "w", **original_dem.profile) as dst:
+        with rasterio.open(output_acc_path, "w", **write_profile) as dst:
             dst.write(acc, 1)
     finally:
         original_dem.close()
