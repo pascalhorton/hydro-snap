@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog(https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning(https://semver.org/spec/v2.0.0.html).
 
 
+## 1.0.2 - 2026-04-23
+
+### Added
+
+- Add `simplification_tolerance` parameter to `recondition_dem` to reduce
+  vertex density of stream, breach, and catchment geometries before processing.   
+  Improves performance on high-resolution datasets.
+
+
 ## 1.0.1 - 2026-04-23
 
 ### Changed

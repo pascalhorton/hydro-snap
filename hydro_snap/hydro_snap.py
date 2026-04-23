@@ -95,7 +95,11 @@ def recondition_dem(
 
     original_dem = _open_raster_check_crs(dem_raster, epsg_code)
     write_profile = {**original_dem.profile, "BIGTIFF": "YES", "compress": "ZSTD", "predictor": 2}
-    simplification_tolerance_m = simplification_tolerance * original_dem.res[0]
+    simplification_tolerance_m = (
+        simplification_tolerance * original_dem.res[0]
+        if simplification_tolerance
+        else None
+    )
     try:
         streams = _prepare_streams(streams_shp, output_dir, stream_orientation)
 
@@ -286,7 +290,7 @@ def _recondition_dem(
         original_dem: rasterio.io.DatasetReader,
         streams: gpd.GeoDataFrame,
         delta: float,
-        simplification_tolerance_m: float | None = 0,
+        simplification_tolerance_m: float | None = None,
 ) -> np.ndarray:
     """Correct the DEM based on the stream network.
 
@@ -295,7 +299,7 @@ def _recondition_dem(
     """
     print("Correcting DEM...")
 
-    if simplification_tolerance_m and simplification_tolerance_m > 0:
+    if simplification_tolerance_m:
         streams = streams.copy()
         streams.geometry = streams.geometry.simplify(
             simplification_tolerance_m, preserve_topology=True
@@ -354,7 +358,7 @@ def _build_walls_at_catchment_borders(
         streams_shp: str | Path,
         original_dem: rasterio.io.DatasetReader,
         elevation_increase: float | None = 1000,
-        simplification_tolerance_m: float | None = 0,
+        simplification_tolerance_m: float | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
@@ -364,7 +368,7 @@ def _build_walls_at_catchment_borders(
 
     catchment = gpd.read_file(catchment_shp)
 
-    if simplification_tolerance_m and simplification_tolerance_m > 0:
+    if simplification_tolerance_m:
         catchment = catchment.copy()
         catchment.geometry = catchment.geometry.simplify(
             simplification_tolerance_m,
@@ -389,7 +393,7 @@ def _build_walls_at_catchment_borders(
 
     rivers = gpd.read_file(streams_shp)
 
-    if simplification_tolerance_m > 0:
+    if simplification_tolerance_m:
         rivers = rivers.copy()
         rivers.geometry = rivers.geometry.simplify(
             simplification_tolerance_m, preserve_topology=True
@@ -419,7 +423,7 @@ def _build_walls_at_catchment_borders(
 
     if breaches_shp is not None:
         breach_gdf = gpd.read_file(breaches_shp)
-        if simplification_tolerance_m > 0:
+        if simplification_tolerance_m:
             breach_gdf = breach_gdf.copy()
             breach_gdf.geometry = breach_gdf.geometry.simplify(
                 simplification_tolerance_m, preserve_topology=True
