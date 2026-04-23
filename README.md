@@ -118,13 +118,14 @@ recondition_dem('path/to/DEM', 'path/to/streams.shp', 'output/dir',
 
 ### Parameters
 
-| Parameter            | Default        | Description                                                      |
-|----------------------|----------------|------------------------------------------------------------------|
-| `delta`              | `0.0001`       | Elevation step (m) applied when lowering cells along the stream  |
-| `walls_height`       | `1000`         | Height (m) of temporary walls placed at the catchment border     |
-| `epsg_code`          | `None`         | EPSG code to assign when the CRS is missing from an input file   |
-| `stream_orientation` | `'downstream'` | `'upstream'` reverses line direction before processing           |
-| `min_accumulation`   | `10000`        | Minimum accumulation cell count for outlet snapping              |
+| Parameter                  | Default        | Description                                                                                                                             |
+|----------------------------|----------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `delta`                    | `0.0001`       | Elevation step (m) applied when lowering cells along the stream                                                                         |
+| `walls_height`             | `1000`         | Height (m) of temporary walls placed at the catchment border                                                                            |
+| `epsg_code`                | `None`         | EPSG code to assign when the CRS is missing from an input file                                                                          |
+| `stream_orientation`       | `'downstream'` | `'upstream'` reverses line direction before processing                                                                                  |
+| `min_accumulation`         | `10000`        | Minimum accumulation cell count for outlet snapping                                                                                     |
+| `simplification_tolerance` | `0.5`          | Simplify geometries before processing, as a fraction of the DEM pixel size. Set to `0` or `None` to disable. Improves performance on high-resolution datasets. |
 
 ## Diagnosing stream network issues
 
