@@ -448,12 +448,20 @@ def _build_walls_at_catchment_borders(
             out_shape=dem.shape,
         )
         has_breach = np.any(poly_boundary_mask & breaches_rasterized)
+
+        # Breach the at the lowest point to ensure flow can leave the catchment
         if not has_breach:
             wall_cells = np.argwhere(poly_boundary_mask & boundaries)
             if len(wall_cells) > 0:
                 elevations = dem[wall_cells[:, 0], wall_cells[:, 1]]
                 r, c = wall_cells[np.argmin(elevations)]
-                boundaries[r, c] = False
+                # Breach the wall around the lowest point (3x3)
+                for di in range(-1, 2):
+                    for dj in range(-1, 2):
+                        ni, nj = r + di, c + dj
+                        if 0 <= ni < dem.shape[0] and 0 <= nj < dem.shape[1]:
+                            if boundaries[ni, nj]:
+                                boundaries[ni, nj] = False
 
     dem[boundaries] += elevation_increase
 
