@@ -20,6 +20,7 @@ import rasterio.features
 from rasterio.crs import CRS
 from rasterio.transform import rowcol
 from shapely.geometry import LineString, Point, mapping
+from tqdm import tqdm
 
 warnings.filterwarnings(
     "ignore",
@@ -136,11 +137,16 @@ def recondition_dem(
         # Use pysheds to fix pits/flats and compute flow fields
         pysheds_grid = Grid.from_raster(str(output_dem_path))
         pysheds_dem = pysheds_grid.read_raster(str(output_dem_path))
+        print("Filling pits...")
         pit_filled_dem = pysheds_grid.fill_pits(pysheds_dem)
+        print("Filling depressions...")
         flooded_dem = pysheds_grid.fill_depressions(pit_filled_dem)
+        print("Resolving flats...")
         inflated_dem = pysheds_grid.resolve_flats(flooded_dem)
 
+        print("Computing flow direction...")
         fdir = pysheds_grid.flowdir(inflated_dem, nodata_out=np.int64(0))
+        print("Computing flow accumulation...")
         acc = pysheds_grid.accumulation(fdir, nodata_out=np.float64(-9999))
 
         # Remove temporary walls before final save
@@ -220,7 +226,7 @@ def _open_vector_check_crs(
 def _prepare_streams(
         streams_shp: str | Path,
         output_dir: str | Path,
-        stream_orientation: Literal['downstream', 'upstream'] = 'downstream'
+        stream_orientation: Literal['downstream', 'upstream'] = 'downstream',
 ) -> gpd.GeoDataFrame:
     """Prepare the streams by adding a rank to each stream.
 
@@ -236,16 +242,19 @@ def _prepare_streams(
 
     # Change stream orientation if needed
     if stream_orientation == 'upstream':
-        print("Changing stream orientation of upstream streams ")
+        print("Changing stream orientation of upstream streams...")
         streams.geometry = streams.geometry.apply(
             lambda g: LineString(g.coords[::-1])
         )
 
     _, stream_ends = extract_stream_starts_ends(streams, output_dir)
 
-    print("Compute stream ranks...")
     streams["rank"] = 0
-    for _idx, row in stream_ends.iterrows():
+    for _idx, row in tqdm(
+        stream_ends.iterrows(),
+        total=len(stream_ends),
+        desc="Computing stream ranks",
+    ):
         rank = 1
         start_point = row.geometry
         streams_near = list(streams.sindex.nearest(start_point))
@@ -298,8 +307,6 @@ def _recondition_dem(
     This walks ordered cells along each stream and ensures a downslope
     progression by lowering neighbouring cells when needed.
     """
-    print("Correcting DEM...")
-
     if simplification_tolerance_m:
         streams = streams.copy()
         streams.geometry = streams.geometry.simplify(
@@ -317,7 +324,7 @@ def _recondition_dem(
 
     new_dem = original_dem.read(1).copy()
 
-    for line in streams.geometry:
+    for line in tqdm(streams.geometry, desc="Correcting DEM"):
         if not line or not line.is_valid:
             continue
 
@@ -366,10 +373,9 @@ def _build_walls_at_catchment_borders(
 
     Returns the modified DEM and a boolean mask identifying boundary cells.
     """
-    print("Building walls at catchment borders...")
-
     catchment = gpd.read_file(catchment_shp)
 
+    print("Simplifying catchment geometries...")
     if simplification_tolerance_m:
         catchment = catchment.copy()
         catchment.geometry = catchment.geometry.simplify(
@@ -377,6 +383,7 @@ def _build_walls_at_catchment_borders(
             preserve_topology=True
         )
 
+    print("Rasterizing catchment boundary...")
     # Rasterize the catchment boundary line
     catchment_boundary = catchment.geometry.boundary
     boundaries = rasterio.features.geometry_mask(
@@ -397,12 +404,14 @@ def _build_walls_at_catchment_borders(
     # Rasterize rivers and stream end points for breach detection
     rivers = gpd.read_file(streams_shp)
 
+    print("Simplifying river geometries...")
     if simplification_tolerance_m:
         rivers = rivers.copy()
         rivers.geometry = rivers.geometry.simplify(
             simplification_tolerance_m, preserve_topology=True
         )
 
+    print("Rasterizing river geometries for breach detection...")
     rivers_rasterized = rasterio.features.geometry_mask(
         [mapping(geom) for geom in rivers.geometry],
         transform=original_dem.transform,
@@ -427,7 +436,7 @@ def _build_walls_at_catchment_borders(
     overlap_mask = boundaries & rivers_rasterized
     overlap_indices = np.argwhere(overlap_mask)
 
-    for i_o, j_o in overlap_indices:
+    for i_o, j_o in tqdm(overlap_indices, desc="Expanding breach openings"):
         for i in range(i_o - 1, i_o + 2):
             for j in range(j_o - 1, j_o + 2):
                 if not (0 <= i < dem.shape[0] and 0 <= j < dem.shape[1]):
@@ -439,6 +448,7 @@ def _build_walls_at_catchment_borders(
                     boundaries[i, j] = True
 
     # Remove all cells covered by explicit breach lines from the wall mask
+    print("Rasterizing breach geometries for breach detection...")
     if breaches_shp is not None:
         breach_gdf = gpd.read_file(breaches_shp)
         if simplification_tolerance_m:
@@ -458,6 +468,7 @@ def _build_walls_at_catchment_borders(
     boundaries[breaches_rasterized] = False
 
     # Open a 3x3 breach around each stream end point that falls on the boundary.
+    print("Expanding breach openings around stream ends...")
     if stream_ends_rasterized is not None:
         for r, c in np.argwhere(boundaries & stream_ends_rasterized):
             for di in range(-1, 2):
@@ -469,6 +480,7 @@ def _build_walls_at_catchment_borders(
 
     # Fallback: for any polygon still lacking a breach, open a 3x3 window at
     # the lowest boundary cell so water can always leave the catchment.
+    print("Ensuring all catchment polygons have a breach...")
     for polygon in catchment.geometry:
         poly_boundary_mask = rasterio.features.geometry_mask(
             [mapping(polygon.boundary)],
@@ -552,14 +564,12 @@ def extract_stream_starts_ends(
     Returns two GeoDataFrames: (unconnected_start_gdf, unconnected_end_gdf).
     If `save_to_shapefile` is True the points are written to the `output_dir`.
     """
-    print("Finding stream starts/ends...")
-
     sindex = streams.sindex
 
     unconnected_start = []
     unconnected_end = []
 
-    for line in streams.geometry:
+    for line in tqdm(streams.geometry, desc="Finding stream starts/ends"):
         if not line or not line.is_valid:
             continue
 

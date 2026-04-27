@@ -33,6 +33,7 @@ dependencies = [
   "pysheds",
   "rasterio",
   "shapely",
+  "tqdm",
 ]
 
 [project.urls]
