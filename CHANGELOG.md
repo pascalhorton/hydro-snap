@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning(https://semver.org/spec/v2.0.0.
 - When no breach or stream intersects a catchment polygon boundary, the automatic
   fallback now opens the full 3×3 neighborhood around the lowest-elevation boundary
   cell instead of a single pixel, ensuring an opening.
+- Open a 3×3 breach at stream end points that fall on a catchment boundary.
 
 
 ## 1.0.2 - 2026-04-23

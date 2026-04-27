@@ -118,6 +118,7 @@ def recondition_dem(
                 original_dem,
                 elevation_increase=walls_height,
                 simplification_tolerance_m=simplification_tolerance_m,
+                stream_ends_shp=output_dir / "stream_ends.shp",
             )
         else:
             if breaches_shp:
@@ -359,6 +360,7 @@ def _build_walls_at_catchment_borders(
         original_dem: rasterio.io.DatasetReader,
         elevation_increase: float | None = 1000,
         simplification_tolerance_m: float | None = None,
+        stream_ends_shp: str | Path | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Raise DEM along catchment borders (except breaches) to contain flow.
 
@@ -375,6 +377,7 @@ def _build_walls_at_catchment_borders(
             preserve_topology=True
         )
 
+    # Rasterize the catchment boundary line
     catchment_boundary = catchment.geometry.boundary
     boundaries = rasterio.features.geometry_mask(
         [mapping(geom) for geom in catchment_boundary],
@@ -391,6 +394,7 @@ def _build_walls_at_catchment_borders(
         out_shape=dem.shape,
     )
 
+    # Rasterize rivers and stream end points for breach detection
     rivers = gpd.read_file(streams_shp)
 
     if simplification_tolerance_m:
@@ -407,6 +411,19 @@ def _build_walls_at_catchment_borders(
         out_shape=dem.shape,
     )
 
+    stream_ends_rasterized = None
+    if stream_ends_shp is not None:
+        stream_ends_gdf = gpd.read_file(stream_ends_shp)
+        if len(stream_ends_gdf) > 0:
+            stream_ends_rasterized = rasterio.features.geometry_mask(
+                [mapping(geom) for geom in stream_ends_gdf.geometry],
+                transform=original_dem.transform,
+                all_touched=True,
+                invert=True,
+                out_shape=dem.shape,
+            )
+
+    # Expand the breach opening around every river-boundary overlap.
     overlap_mask = boundaries & rivers_rasterized
     overlap_indices = np.argwhere(overlap_mask)
 
@@ -421,6 +438,7 @@ def _build_walls_at_catchment_borders(
                 if not catchment_rasterized[i, j] and not boundaries[i, j]:
                     boundaries[i, j] = True
 
+    # Remove all cells covered by explicit breach lines from the wall mask
     if breaches_shp is not None:
         breach_gdf = gpd.read_file(breaches_shp)
         if simplification_tolerance_m:
@@ -439,6 +457,18 @@ def _build_walls_at_catchment_borders(
     )
     boundaries[breaches_rasterized] = False
 
+    # Open a 3x3 breach around each stream end point that falls on the boundary.
+    if stream_ends_rasterized is not None:
+        for r, c in np.argwhere(boundaries & stream_ends_rasterized):
+            for di in range(-1, 2):
+                for dj in range(-1, 2):
+                    ni, nj = r + di, c + dj
+                    if 0 <= ni < dem.shape[0] and 0 <= nj < dem.shape[1]:
+                        if boundaries[ni, nj]:
+                            boundaries[ni, nj] = False
+
+    # Fallback: for any polygon still lacking a breach, open a 3x3 window at
+    # the lowest boundary cell so water can always leave the catchment.
     for polygon in catchment.geometry:
         poly_boundary_mask = rasterio.features.geometry_mask(
             [mapping(polygon.boundary)],
@@ -448,14 +478,14 @@ def _build_walls_at_catchment_borders(
             out_shape=dem.shape,
         )
         has_breach = np.any(poly_boundary_mask & breaches_rasterized)
+        if not has_breach and stream_ends_rasterized is not None:
+            has_breach = np.any(poly_boundary_mask & stream_ends_rasterized)
 
-        # Breach the at the lowest point to ensure flow can leave the catchment
         if not has_breach:
             wall_cells = np.argwhere(poly_boundary_mask & boundaries)
             if len(wall_cells) > 0:
                 elevations = dem[wall_cells[:, 0], wall_cells[:, 1]]
                 r, c = wall_cells[np.argmin(elevations)]
-                # Breach the wall around the lowest point (3x3)
                 for di in range(-1, 2):
                     for dj in range(-1, 2):
                         ni, nj = r + di, c + dj
@@ -463,6 +493,7 @@ def _build_walls_at_catchment_borders(
                             if boundaries[ni, nj]:
                                 boundaries[ni, nj] = False
 
+    # Raise all remaining boundary cells to form the containment wall
     dem[boundaries] += elevation_increase
 
     return dem, boundaries
